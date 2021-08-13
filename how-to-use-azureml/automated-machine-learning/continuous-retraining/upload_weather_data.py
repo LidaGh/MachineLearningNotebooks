@@ -49,22 +49,24 @@ print("Argument 1(ds_name): %s" % args.ds_name)
 
 dstor = ws.get_default_datastore()
 register_dataset = False
+end_time = datetime.utcnow()
+
 try:
     ds = Dataset.get_by_name(ws, args.ds_name)
     end_time_last_slice = ds.data_changed_time.replace(tzinfo=None)
     print("Dataset {0} last updated on {1}".format(args.ds_name,
                                                    end_time_last_slice))
-except Exception as e:
+except Exception:
     print(traceback.format_exc())
     print("Dataset with name {0} not found, registering new dataset.".format(args.ds_name))
     register_dataset = True
-    end_time_last_slice = datetime.today() - relativedelta(weeks=1)
+    end_time = datetime(2021, 5, 1, 0, 0)
+    end_time_last_slice = end_time - relativedelta(weeks=2)
 
-end_time = datetime.utcnow()
 train_df = get_noaa_data(end_time_last_slice, end_time)
 
 if train_df.size > 0:
-    print("Received {0} rows of new data after {0}.".format(
+    print("Received {0} rows of new data after {1}.".format(
         train_df.shape[0], end_time_last_slice))
     folder_name = "{}/{:04d}/{:02d}/{:02d}/{:02d}/{:02d}/{:02d}".format(args.ds_name, end_time.year,
                                                                         end_time.month, end_time.day,
@@ -80,10 +82,10 @@ if train_df.size > 0:
                        target_path=folder_name,
                        overwrite=True,
                        show_progress=True)
-
-    if register_dataset:
-        ds = Dataset.Tabular.from_delimited_files(dstor.path("{}/**/*.csv".format(
-            args.ds_name)), partition_format='/{partition_date:yyyy/MM/dd/hh/mm/ss}/data.csv')
-        ds.register(ws, name=args.ds_name)
 else:
     print("No new data since {0}.".format(end_time_last_slice))
+
+if register_dataset:
+    ds = Dataset.Tabular.from_delimited_files(dstor.path("{}/**/*.csv".format(
+        args.ds_name)), partition_format='/{partition_date:yyyy/MM/dd/HH/mm/ss}/data.csv')
+    ds.register(ws, name=args.ds_name)

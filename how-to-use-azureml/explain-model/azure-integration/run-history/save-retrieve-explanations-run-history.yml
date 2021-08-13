@@ -2,7 +2,12 @@ name: save-retrieve-explanations-run-history
 dependencies:
 - pip:
   - azureml-sdk
-  - interpret
   - azureml-interpret
-  - azureml-contrib-interpret
+  - flask
+  - flask-cors
+  - gevent>=1.3.6
+  - jinja2
+  - ipython
+  - matplotlib
   - ipywidgets
+  - raiwidgets~=0.7.0

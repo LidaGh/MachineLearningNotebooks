@@ -2,9 +2,13 @@ name: explain-model-on-amlcompute
 dependencies:
 - pip:
   - azureml-sdk
-  - interpret
   - azureml-interpret
-  - azureml-contrib-interpret
-  - sklearn-pandas
-  - azureml-dataprep
+  - flask
+  - flask-cors
+  - gevent>=1.3.6
+  - jinja2
+  - ipython
+  - matplotlib
+  - azureml-dataset-runtime
   - ipywidgets
+  - raiwidgets~=0.7.0

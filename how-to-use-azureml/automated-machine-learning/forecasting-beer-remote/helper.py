@@ -3,11 +3,11 @@ from azureml.core import Environment
 from azureml.core.conda_dependencies import CondaDependencies
 from azureml.train.estimator import Estimator
 from azureml.core.run import Run
+from azureml.automl.core.shared import constants
 
 
 def split_fraction_by_grain(df, fraction, time_column_name,
                             grain_column_names=None):
-
     if not grain_column_names:
         df['tmp_grain_column'] = 'grain'
         grain_column_names = ['tmp_grain_column']
@@ -17,10 +17,10 @@ def split_fraction_by_grain(df, fraction, time_column_name,
                   .groupby(grain_column_names, group_keys=False))
 
     df_head = df_grouped.apply(lambda dfg: dfg.iloc[:-int(len(dfg) *
-                               fraction)] if fraction > 0 else dfg)
+                                                          fraction)] if fraction > 0 else dfg)
 
     df_tail = df_grouped.apply(lambda dfg: dfg.iloc[-int(len(dfg) *
-                               fraction):] if fraction > 0 else dfg[:0])
+                                                         fraction):] if fraction > 0 else dfg[:0])
 
     if 'tmp_grain_column' in grain_column_names:
         for df2 in (df, df_head, df_tail):
@@ -59,11 +59,13 @@ def get_result_df(remote_run):
                                      'primary_metric', 'Score'])
     goal_minimize = False
     for run in children:
-        if('run_algorithm' in run.properties and 'score' in run.properties):
+        if run.get_status().lower() == constants.RunState.COMPLETE_RUN \
+                and 'run_algorithm' in run.properties and 'score' in run.properties:
+            # We only count in the completed child runs.
             summary_df[run.id] = [run.id, run.properties['run_algorithm'],
                                   run.properties['primary_metric'],
                                   float(run.properties['score'])]
-            if('goal' in run.properties):
+            if ('goal' in run.properties):
                 goal_minimize = run.properties['goal'].split('_')[-1] == 'min'
 
     summary_df = summary_df.T.sort_values(
@@ -76,9 +78,12 @@ def get_result_df(remote_run):
 def run_inference(test_experiment, compute_target, script_folder, train_run,
                   test_dataset, lookback_dataset, max_horizon,
                   target_column_name, time_column_name, freq):
-    train_run.download_file('outputs/model.pkl', 'inference/model.pkl')
-    train_run.download_file('outputs/conda_env_v_1_0_0.yml',
-                            'inference/condafile.yml')
+    model_base_name = 'model.pkl'
+    if 'model_data_location' in train_run.properties:
+        model_location = train_run.properties['model_data_location']
+        _, model_base_name = model_location.rsplit('/', 1)
+    train_run.download_file('outputs/{}'.format(model_base_name), 'inference/{}'.format(model_base_name))
+    train_run.download_file('outputs/conda_env_v_1_0_0.yml', 'inference/condafile.yml')
 
     inference_env = Environment("myenv")
     inference_env.docker.enabled = True
@@ -91,7 +96,8 @@ def run_inference(test_experiment, compute_target, script_folder, train_run,
                         '--max_horizon': max_horizon,
                         '--target_column_name': target_column_name,
                         '--time_column_name': time_column_name,
-                        '--frequency': freq
+                        '--frequency': freq,
+                        '--model_path': model_base_name
                     },
                     inputs=[test_dataset.as_named_input('test_data'),
                             lookback_dataset.as_named_input('lookback_data')],
@@ -114,7 +120,6 @@ def run_multiple_inferences(summary_df, train_experiment, test_experiment,
                             compute_target, script_folder, test_dataset,
                             lookback_dataset, max_horizon, target_column_name,
                             time_column_name, freq):
-
     for run_name, run_summary in summary_df.iterrows():
         print(run_name)
         print(run_summary)

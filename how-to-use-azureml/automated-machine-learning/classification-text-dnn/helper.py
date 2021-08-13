@@ -1,6 +1,5 @@
 import pandas as pd
 from azureml.core import Environment
-from azureml.core.conda_dependencies import CondaDependencies
 from azureml.train.estimator import Estimator
 from azureml.core.run import Run
 
@@ -8,13 +7,7 @@ from azureml.core.run import Run
 def run_inference(test_experiment, compute_target, script_folder, train_run,
                   test_dataset, target_column_name, model_name):
 
-    train_run.download_file('outputs/conda_env_v_1_0_0.yml',
-                            'inference/condafile.yml')
-
-    inference_env = Environment("myenv")
-    inference_env.docker.enabled = True
-    inference_env.python.conda_dependencies = CondaDependencies(
-        conda_dependencies_file_path='inference/condafile.yml')
+    inference_env = train_run.get_environment()
 
     est = Estimator(source_directory=script_folder,
                     entry_script='infer.py',
@@ -22,7 +15,9 @@ def run_inference(test_experiment, compute_target, script_folder, train_run,
                         '--target_column_name': target_column_name,
                         '--model_name': model_name
                     },
-                    inputs=[test_dataset.as_named_input('test_data')],
+                    inputs=[
+                        test_dataset.as_named_input('test_data')
+                    ],
                     compute_target=compute_target,
                     environment_definition=inference_env)
 

@@ -1,12 +1,22 @@
-import pandas as pd
-import numpy as np
 import argparse
-from azureml.core import Run
+import os
+
+import numpy as np
+import pandas as pd
+
+from pandas.tseries.frequencies import to_offset
 from sklearn.externals import joblib
 from sklearn.metrics import mean_absolute_error, mean_squared_error
-from azureml.automl.core._vendor.automl.client.core.common import metrics
-from automl.client.core.common import constants
-from pandas.tseries.frequencies import to_offset
+
+from azureml.automl.runtime.shared.score import scoring, constants
+from azureml.core import Run
+
+try:
+    import torch
+
+    _torch_present = True
+except ImportError:
+    _torch_present = False
 
 
 def align_outputs(y_predicted, X_trans, X_test, y_test,
@@ -46,7 +56,7 @@ def align_outputs(y_predicted, X_trans, X_test, y_test,
     # or at edges of time due to lags/rolling windows
     clean = together[together[[target_column_name,
                                predicted_column_name]].notnull().all(axis=1)]
-    return(clean)
+    return (clean)
 
 
 def do_rolling_forecast_with_lookback(fitted_model, X_test, y_test,
@@ -81,8 +91,7 @@ def do_rolling_forecast_with_lookback(fitted_model, X_test, y_test,
         if origin_time != X[time_column_name].min():
             # Set the context by including actuals up-to the origin time
             test_context_expand_wind = (X[time_column_name] < origin_time)
-            context_expand_wind = (
-                X_test_expand[time_column_name] < origin_time)
+            context_expand_wind = (X_test_expand[time_column_name] < origin_time)
             y_query_expand[context_expand_wind] = y[test_context_expand_wind]
 
         # Print some debug info
@@ -113,8 +122,7 @@ def do_rolling_forecast_with_lookback(fitted_model, X_test, y_test,
         # Align forecast with test set for dates within
         # the current rolling window
         trans_tindex = X_trans.index.get_level_values(time_column_name)
-        trans_roll_wind = (trans_tindex >= origin_time) & (
-            trans_tindex < horizon_time)
+        trans_roll_wind = (trans_tindex >= origin_time) & (trans_tindex < horizon_time)
         test_roll_wind = expand_wind & (X[time_column_name] >= origin_time)
         df_list.append(align_outputs(
             y_fcst[trans_roll_wind], X_trans[trans_roll_wind],
@@ -153,8 +161,7 @@ def do_rolling_forecast(fitted_model, X_test, y_test, max_horizon, freq='D'):
         if origin_time != X_test[time_column_name].min():
             # Set the context by including actuals up-to the origin time
             test_context_expand_wind = (X_test[time_column_name] < origin_time)
-            context_expand_wind = (
-                X_test_expand[time_column_name] < origin_time)
+            context_expand_wind = (X_test_expand[time_column_name] < origin_time)
             y_query_expand[context_expand_wind] = y_test[
                 test_context_expand_wind]
 
@@ -184,10 +191,8 @@ def do_rolling_forecast(fitted_model, X_test, y_test, max_horizon, freq='D'):
         # Align forecast with test set for dates within the
         # current rolling window
         trans_tindex = X_trans.index.get_level_values(time_column_name)
-        trans_roll_wind = (trans_tindex >= origin_time) & (
-            trans_tindex < horizon_time)
-        test_roll_wind = expand_wind & (
-            X_test[time_column_name] >= origin_time)
+        trans_roll_wind = (trans_tindex >= origin_time) & (trans_tindex < horizon_time)
+        test_roll_wind = expand_wind & (X_test[time_column_name] >= origin_time)
         df_list.append(align_outputs(y_fcst[trans_roll_wind],
                                      X_trans[trans_roll_wind],
                                      X_test[test_roll_wind],
@@ -219,6 +224,10 @@ def MAPE(actual, pred):
     return np.mean(APE(actual_safe, pred_safe))
 
 
+def map_location_cuda(storage, loc):
+    return storage.cuda()
+
+
 parser = argparse.ArgumentParser()
 parser.add_argument(
     '--max_horizon', type=int, dest='max_horizon',
@@ -232,20 +241,23 @@ parser.add_argument(
 parser.add_argument(
     '--frequency', type=str, dest='freq',
     help='Frequency of prediction')
-
+parser.add_argument(
+    '--model_path', type=str, dest='model_path',
+    default='model.pkl', help='Filename of model to be loaded')
 
 args = parser.parse_args()
 max_horizon = args.max_horizon
 target_column_name = args.target_column_name
 time_column_name = args.time_column_name
 freq = args.freq
-
+model_path = args.model_path
 
 print('args passed are: ')
 print(max_horizon)
 print(target_column_name)
 print(time_column_name)
 print(freq)
+print(model_path)
 
 run = Run.get_context()
 # get input dataset by name
@@ -267,7 +279,19 @@ X_lookback_df = lookback_dataset.drop_columns(columns=[target_column_name])
 y_lookback_df = lookback_dataset.with_timestamp_columns(
     None).keep_columns(columns=[target_column_name])
 
-fitted_model = joblib.load('model.pkl')
+_, ext = os.path.splitext(model_path)
+if ext == '.pt':
+    # Load the fc-tcn torch model.
+    assert _torch_present
+    if torch.cuda.is_available():
+        map_location = map_location_cuda
+    else:
+        map_location = 'cpu'
+    with open(model_path, 'rb') as fh:
+        fitted_model = torch.load(fh, map_location=map_location)
+else:
+    # Load the sklearn pipeline.
+    fitted_model = joblib.load(model_path)
 
 if hasattr(fitted_model, 'get_lookback'):
     lookback = fitted_model.get_lookback()
@@ -294,12 +318,11 @@ print(df_all[target_column_name])
 print("predicted values:::")
 print(df_all['predicted'])
 
-# use automl metrics module
-scores = metrics.compute_metrics_regression(
-    df_all['predicted'],
-    df_all[target_column_name],
-    list(constants.Metric.SCALAR_REGRESSION_SET),
-    None, None, None)
+# Use the AutoML scoring module
+regression_metrics = list(constants.REGRESSION_SCALAR_SET)
+y_test = np.array(df_all[target_column_name])
+y_pred = np.array(df_all['predicted'])
+scores = scoring.score_regression(y_test, y_pred, regression_metrics)
 
 print("scores:")
 print(scores)

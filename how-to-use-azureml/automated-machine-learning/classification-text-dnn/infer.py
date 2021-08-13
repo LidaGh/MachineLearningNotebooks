@@ -1,9 +1,12 @@
-import numpy as np
 import argparse
-from azureml.core import Run
+
+import pandas as pd
+import numpy as np
+
 from sklearn.externals import joblib
-from azureml.automl.core._vendor.automl.client.core.common import metrics
-from automl.client.core.common import constants
+
+from azureml.automl.runtime.shared.score import scoring, constants
+from azureml.core import Run
 from azureml.core.model import Model
 
 
@@ -39,13 +42,16 @@ y_test_df = test_dataset.with_timestamp_columns(None) \
 
 predicted = model.predict_proba(X_test_df)
 
-# use automl metrics module
-scores = metrics.compute_metrics_classification(
-    np.array(predicted),
-    np.array(y_test_df),
-    class_labels=model.classes_,
-    metrics=list(constants.Metric.SCALAR_CLASSIFICATION_SET)
-)
+if isinstance(predicted, pd.DataFrame):
+    predicted = predicted.values
+
+# Use the AutoML scoring module
+train_labels = model.classes_
+class_labels = np.unique(np.concatenate((y_test_df.values, np.reshape(train_labels, (-1, 1)))))
+classification_metrics = list(constants.CLASSIFICATION_SCALAR_SET)
+scores = scoring.score_classification(y_test_df.values, predicted,
+                                      classification_metrics,
+                                      class_labels, train_labels)
 
 print("scores:")
 print(scores)
